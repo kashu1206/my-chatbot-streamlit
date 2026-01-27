@@ -64,7 +64,7 @@ def get_system_instruction(level):
             " **Only if there are obvious grammar or spelling mistakes in the user's input, gently point them out or suggest a more natural way to phrase it, assisting the user to correct them on their own.**"
             " Incorporate slightly longer sentences and somewhat complex sentence structures, focusing on a natural flow of conversation."
         )
-    elif level == "Ms. Brown:
+    elif level == "Ms. Brown":
         return base_instruction + (
             " Your name is Ms. Lucy Brown. You are an ALT (Assistant Language Teacher) at Wakaba Junior High School, originally from London, UK."
             " You love reading and own many different books. Recently, you've been reading a lot of Japanese novels."
