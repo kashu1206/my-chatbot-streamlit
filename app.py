@@ -1,11 +1,11 @@
-import base64
+import base64 # <-- これが以前インポートされていなかった問題に対する修正（今回は既に修正済みと仮定）
 import streamlit as st
 import time
 import google.generativeai as genai
 import io
 import os
 import json
-import tempfile # 一時ファイル作成用
+import tempfile
 
 # GCP Speech-to-Text and Text-to-Speech clients
 from google.cloud import speech_v1p1beta1 as speech
@@ -30,47 +30,35 @@ try:
     genai.configure(api_key=gemini_api_key)
 except KeyError:
     st.error("Error: GEMINI_API_KEY is not set in Streamlit Secrets.")
-    st.stop()
+    st.stop() # Gemini APIキーがなければアプリを停止
 
 # --- GCP Credentials (for Speech-to-Text and Text-to-Speech) ---
 _can_use_gcp_voice = False
 _speech_client = None
 _texttospeech_client = None
-_decoded_gcp_credentials_json_string = None # デコードされたJSON文字列を格納
+_decoded_gcp_credentials_json_string = None 
+_temp_key_file_path = None # 一時ファイルのパス
 
 try:
     # 優先: Base64エンコードされた認証情報を確認
     if "GCP_CREDENTIALS_BASE64" in st.secrets:
         encoded_credentials = st.secrets["GCP_CREDENTIALS_BASE64"]
         _decoded_gcp_credentials_json_string = base64.b64decode(encoded_credentials.encode("utf-8")).decode("utf-8")
-        
-        # Streamlit-mic-recorder など、`st.secrets["GCP_CREDENTIALS"]` を直接参照するライブラリのために、
-        # デコードしたJSON文字列を `st.secrets["GCP_CREDENTIALS"]` に格納します。
-        # (重要 ライブラリがJSON文字列を期待するため、辞書型ではなく文字列として格納します)
-        st.secrets["GCP_CREDENTIALS"] = _decoded_gcp_credentials_json_string
-        
         st.success("GCP Credentials loaded successfully from Base64 secret!")
 
     # フォールバック: 直接GCP_CREDENTIALSがJSON文字列として設定されている場合
-    # (現時点ではBase64運用を推奨するため、このブロックは通常実行されません)
     elif "GCP_CREDENTIALS" in st.secrets:
         raw_credentials = st.secrets["GCP_CREDENTIALS"]
         if isinstance(raw_credentials, dict): # 既に辞書型の場合
             _decoded_gcp_credentials_json_string = json.dumps(raw_credentials)
         else: # 文字列の場合
             _decoded_gcp_credentials_json_string = raw_credentials
-        
-        # ここで `st.secrets["GCP_CREDENTIALS"]` が辞書型でなければ、文字列として確保
-        # `streamlit-mic-recorder` は内部で json.loads() を試みるため、文字列である必要がある
-        if not isinstance(st.secrets["GCP_CREDENTIALS"], str):
-             st.secrets["GCP_CREDENTIALS"] = _decoded_gcp_credentials_json_string
-
         st.success("GCP Credentials loaded successfully from direct secret!")
     
     else:
-        st.warning("Warning GCP_CREDENTIALS (Base64 or direct) for Speech-to-Text/Text-to-Speech are not set in Streamlit Secrets. Voice input/output will not be available.")
-        st.stop() # 認証情報がなければアプリの実行を停止
-
+        st.warning("Warning: GCP_CREDENTIALS (Base64 or direct) for Speech-to-Text/Text-to-Speech are not set in Streamlit Secrets. Voice input/output will not be available.")
+        # GCP認証情報がない場合でもGemini部分は動くように st.stop() は呼ばない
+        
     # 認証情報文字列が存在する場合のみ、GCPクライアントを初期化
     if _decoded_gcp_credentials_json_string:
         # サービスアカウント情報で認証情報を生成
@@ -95,7 +83,12 @@ except Exception as e:
     st.error(f"Critical error during GCP credentials setup: {e}")
     st.warning("Voice input/output will not be available due to GCP client initialization failure.")
     _can_use_gcp_voice = False
-    # st.stop() # 認証エラーがあってもGemini部分は動かすか、ここで止めるか選択
+
+# --- アプリ終了時に一時ファイルをクリーンアップ ---
+# Streamlitのライフサイクルとtempfileの削除タイミングは複雑ですが、
+# Streamlit Cloudではアプリの再起動時にファイルシステムがクリーンアップされるため、
+# 明示的な os.remove(_temp_key_file_path) は必須ではないかもしれません。
+# ローカルで実行していて、確実に削除したい場合は考慮します。
 
 # --- 音声処理 (無音検出・トリミング) の設定 ---
 SAMPLE_RATE = 16000  # Streamlit mic recorder は通常16kHzで録音される (GCP Speech-to-Textの推奨)
@@ -115,8 +108,6 @@ def transcribe_audio_gcp(audio_bytes):
             audio_segment = audio_segment.set_frame_rate(SAMPLE_RATE).set_channels(1)
         
         # pydub.silence.detect_nonsilent を使用して無音区間を検出・トリミング
-        # min_silence_len: この時間以上続く無音を無音と判定
-        # silence_thresh: この音量レベル以下を無音と判定 (dBFS)
         nonsilent_chunks = detect_nonsilent(audio_segment, 
                                             min_silence_len=500, # 500ms以上の無音を検出
                                             silence_thresh=-35)  # -35dBFS以下の音量を無音と判定
