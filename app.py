@@ -90,9 +90,9 @@ with st.sidebar:
     english_level = st.selectbox(
         "Select your English Level:",
         [
-            "Beginner (Junior High School 1st Grade Equivalent)",
-            "Intermediate (Junior High School Graduate/Eiken Grade 3 Equivalent)",
-            "Advanced (Japanese English Teacher/Eiken Pre-1st Grade or Higher)"
+            "Hana",
+            "Mark",
+            "Ms. Brown"
         ],
         index=0,
         key="english_level_selector"
