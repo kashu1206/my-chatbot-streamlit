@@ -1,5 +1,5 @@
 # my_chatbot_app/requirements.txt
 streamlit
 google-generativeai
-streamlit-mic-recorder
-openai
+google-cloud-speech
+google-cloud-texttospeech
