@@ -295,7 +295,7 @@ if st.session_state.get("previous_english_level") != english_level:
     elif english_level == "Ms. Brown":
         initial_message = "Good day! I'm Ms. Brown. How may I assist you today?"
 
-    system_change_message = f"Okay, switching to the {english_level}  {initial_message}"
+    system_change_message = f"Okay, switching to the {english_level} . {initial_message}"
     st.session_state.messages.append({"role": "assistant", "content": system_change_message})
     st.session_state.previous_english_level = english_level
 
