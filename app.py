@@ -2,37 +2,133 @@ import streamlit as st
 import time
 import google.generativeai as genai
 import io
+import os
+import json # GCP認証情報用
 
-try:
-    from openai import OpenAI
-except ImportError:
-    st.error("`openai` ライブラリがインストールされていません。`pip install openai` を実行してください。")
-    OpenAI = None
+# GCP Speech-to-Text and Text-to-Speech clients
+from google.cloud import speech_v1p1beta1 as speech
+from google.cloud import texttospeech_v1 as texttospeech
+from google.oauth2 import service_account
+
+# VAD (Voice Activity Detection) libraries (webrtcvad は使用しないため削除)
+from pydub import AudioSegment
+from pydub.silence import detect_nonsilent
 
 try:
     from streamlit_mic_recorder import mic_recorder
 except ImportError:
-    st.error("`streamlit-mic-recorder` ライブラリがインストールされていません。`pip install streamlit-mic_recorder` を実行してください。")
+    st.error("`streamlit-mic_recorder` ライブラリがインストールされていません。`pip install streamlit-mic_recorder` を実行してください。")
     mic_recorder = None
 
-# --- 0. 環境変数の設定 ---
+# --- 0. 環境変数の設定とクライアントの初期化 ---
+
+# Gemini API Key
 try:
     gemini_api_key = st.secrets["GEMINI_API_KEY"]
+    genai.configure(api_key=gemini_api_key)
 except KeyError:
     st.error("Error: GEMINI_API_KEY is not set in Streamlit Secrets.")
     st.stop()
 
-openai_client = None
-if OpenAI:
-    try:
-        openai_api_key = st.secrets["OPENAI_API_KEY"]
-        openai_client = OpenAI(api_key=openai_api_key)
-    except KeyError:
-        st.warning("Warning: OPENAI_API_KEY is not set in Streamlit Secrets. Voice input (Whisper) will not be available.")
-else:
-    openai_client = None
+# GCP Credentials (for Speech-to-Text and Text-to-Speech)
+can_use_gcp_voice = False
+speech_client = None
+texttospeech_client = None
 
-genai.configure(api_key=gemini_api_key)
+if "GCP_CREDENTIALS" in st.secrets:
+    try:
+        gcp_credentials_json = st.secrets["GCP_CREDENTIALS"]
+        if isinstance(gcp_credentials_json, str): # JSON文字列の場合
+            gcp_credentials_json = json.loads(gcp_credentials_json)
+        
+        credentials = service_account.Credentials.from_service_account_info(gcp_credentials_json)
+        speech_client = speech.SpeechClient(credentials=credentials)
+        texttospeech_client = texttospeech.TextToSpeechClient(credentials=credentials)
+        can_use_gcp_voice = True
+    except Exception as e:
+        st.error(f"Error initializing GCP clients: {e}. Please check your GCP_CREDENTIALS in Streamlit Secrets.")
+        can_use_gcp_voice = False
+else:
+    st.warning("Warning: GCP_CREDENTIALS for Speech-to-Text/Text-to-Speech are not set in Streamlit Secrets. Voice input/output will not be available.")
+    can_use_gcp_voice = False
+
+
+# --- 音声処理 (無音検出・トリミング) の設定 ---
+SAMPLE_RATE = 16000  # Streamlit mic recorder は通常16kHzで録音される (GCP Speech-to-Textの推奨)
+
+# --- 音声からテキストへ (Speech-to-Text) ---
+def transcribe_audio_gcp(audio_bytes):
+    if not speech_client:
+        st.error("Speech-to-Text client is not initialized.")
+        return ""
+
+    try:
+        # pydubでオーディオバイトをロード
+        audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes), format="webm")
+        # 16kHz, 1チャンネルに変換 (GCP Speech-to-Textの推奨)
+        if audio_segment.frame_rate != SAMPLE_RATE or audio_segment.channels != 1:
+            audio_segment = audio_segment.set_frame_rate(SAMPLE_RATE).set_channels(1)
+        
+        # pydub.silence.detect_nonsilent を使用して無音区間を検出・トリミング
+        # min_silence_len: この時間以上続く無音を無音と判定
+        # silence_thresh: この音量レベル以下を無音と判定 (dBFS)
+        nonsilent_chunks = detect_nonsilent(audio_segment, 
+                                            min_silence_len=500, # 500ms以上の無音を検出
+                                            silence_thresh=-35)  # -35dBFS以下の音量を無音と判定
+
+        if not nonsilent_chunks: # 音声が全く検出されなかった場合
+            return ""
+
+        # 無音でないチャンクのみを結合
+        trimmed_audio = AudioSegment.empty()
+        for start_ms, end_ms in nonsilent_chunks:
+            trimmed_audio += audio_segment[start_ms:end_ms]
+
+        st.info(f"Original audio duration: {len(audio_segment)/1000:.2f}s, Trimmed audio duration {len(trimmed_audio)/1000:.2f}s")
+        # ※ このトリミングにより、APIに送信するデータ量を削減し、コスト削減効果が期待できます。
+
+        # 再びバイト列に変換 (WAV形式でヘッダを付与して送るのが最も確実)
+        trimmed_audio_bytes = trimmed_audio.export(format="wav").read()
+
+        audio = speech.RecognitionAudio(content=trimmed_audio_bytes)
+        config = speech.RecognitionConfig(
+            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16, # WAVなのでLINEAR16
+            sample_rate_hertz=SAMPLE_RATE,
+            language_code="en-US",
+        )
+
+        response = speech_client.recognize(config=config, audio=audio)
+        transcript = ""
+        for result in response.results:
+            transcript += result.alternatives[0].transcript
+        return transcript
+    except Exception as e:
+        st.error(f"Error transcribing audio with Google Cloud Speech-to-Text API: {e}")
+        return ""
+
+# --- テキストから音声へ (Text-to-Speech) ---
+def synthesize_text_gcp(text):
+    if not texttospeech_client:
+        st.error("Text-to-Speech client is not initialized.")
+        return None
+
+    try:
+        synthesis_input = texttospeech.SynthesisInput(text=text)
+        voice = texttospeech.VoiceSelectionParams(
+            language_code="en-US", ssml_gender=texttospeech.SsmlVoiceGender.FEMALE # FEMALE or MALE
+        )
+        audio_config = texttospeech.AudioConfig(
+            audio_encoding=texttospeech.AudioEncoding.MP3
+        )
+
+        response = texttospeech_client.synthesize_speech(
+            input=synthesis_input, voice=voice, audio_config=audio_config
+        )
+        return response.audio_content # MP3バイト列
+    except Exception as e:
+        st.error(f"Error synthesizing speech with Google Cloud Text-to-Speech API: {e}")
+        return None
+
 
 # --- キャラクター設定とレベル調整機能 ---
 def get_system_instruction(level):
@@ -41,7 +137,7 @@ def get_system_instruction(level):
 
     if level == "Hana":
         return base_instruction + (
-            " Your name is Tanaka Hana. You are a girl from Wakaba Junior High School, originally from Wakaba City." # 修正箇所: 名前の順序を変更
+            " Your name is Tanaka Hana. You are a girl from Wakaba Junior High School, originally from Wakaba City."
             " You have a gentle and meticulous personality, and your friends often consult you when they're in trouble."
             " You've been dedicated to soccer since age 3. Recently, you've been enjoying family camping trips and mastering camp cooking."
             " You're preparing to play in an overseas soccer league after junior high school graduation."
@@ -78,6 +174,7 @@ def get_system_instruction(level):
     else: # Default case, though unlikely with selectbox
         return base_instruction + " Use natural, everyday English. Engage in friendly conversation and ask open-ended questions."
 
+
 # --- Streamlit UIの構築 ---
 st.set_page_config(layout="wide")
 st.title("English Conversation Partner 🗣️")
@@ -98,12 +195,13 @@ with st.sidebar:
         key="english_level_selector"
     )
 
-    # 音声入力のON/OFFトグル
-    use_audio_input = st.toggle("Enable Voice Input", value=False, key="audio_input_toggle")
+    # 音声入力/出力のON/OFFトグル (GCPクライアントが初期化できた場合のみ有効)
+    use_audio_io = st.toggle("Enable Voice Input/Output (GCP)", value=False, key="audio_io_toggle", disabled=not can_use_gcp_voice)
 
-    if use_audio_input and (mic_recorder is None or openai_client is None):
-        st.warning("音声入力は、`streamlit-mic-recorder` または `openai` ライブラリが不足しているか、OpenAI APIキーが設定されていないため無効です。") # User-facing warning in Japanese is fine
-        use_audio_input = False
+    if use_audio_io and (mic_recorder is None or not can_use_gcp_voice):
+        st.warning("音声入出力は、`streamlit-mic-recorder` ライブラリが不足しているか、GCP認証情報が正しく設定されていないため無効です。")
+    elif not use_audio_io:
+        st.info("音声入出力は現在無効です。設定で有効にできます。")
 
     st.info("The AI will always respond in English, based on your selected level.")
 
@@ -117,23 +215,44 @@ model = genai.GenerativeModel(
 # --- チャット履歴をStreamlitのセッションステートで管理 ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
-    # Initial message can vary slightly based on level/character, but a generic one for now.
-    st.session_state.messages.append({"role": "assistant", "content": "Hello! I'm your English conversation partner. What would you like to talk about today?"})
     st.session_state.previous_english_level = english_level # Initialize previous_english_level
+    # 初回メッセージを生成
+    initial_message = ""
+    if english_level == "Hana":
+        initial_message = "Hi! I'm Tanaka Hana. What would you like to talk about today?"
+    elif english_level == "Mark":
+        initial_message = "Hey there! I'm Mark. What's up?"
+    elif english_level == "Ms. Brown":
+        initial_message = "Good day! I'm Ms. Brown. How may I assist you today?"
+    st.session_state.messages.append({"role": "assistant", "content": initial_message})
+
+    # 初回メッセージの音声再生
+    if use_audio_io and can_use_gcp_voice and initial_message:
+        audio_output = synthesize_text_gcp(initial_message)
+        if audio_output:
+            st.audio(audio_output, format="audio/mp3", autoplay=True)
+
 
 if st.session_state.get("previous_english_level") != english_level:
     st.session_state.messages = []
     # Dynamic initial message after level change
     initial_message = "Hello! Let's start our conversation. What's on your mind today?"
-    if english_level == "Beginner (Junior High School 1st Grade Equivalent)":
-        initial_message = "Hi! I'm Tanaka Hana. What would you like to talk about today?" # 修正箇所: ここも名前の順序を変更
-    elif english_level == "Intermediate (Junior High School Graduate/Eiken Grade 3 Equivalent)":
+    if english_level == "Hana":
+        initial_message = "Hi! I'm Tanaka Hana. What would you like to talk about today?"
+    elif english_level == "Mark":
         initial_message = "Hey there! I'm Mark. What's up?"
-    elif english_level == "Advanced (Japanese English Teacher/Eiken Pre-1st Grade or Higher)":
+    elif english_level == "Ms. Brown":
         initial_message = "Good day! I'm Ms. Brown. How may I assist you today?"
 
-    st.session_state.messages.append({"role": "assistant", "content": f"Okay, switching to the {english_level} level. {initial_message}"})
+    system_change_message = f"Okay, switching to the {english_level} level. {initial_message}"
+    st.session_state.messages.append({"role": "assistant", "content": system_change_message})
     st.session_state.previous_english_level = english_level
+
+    # レベル変更時のメッセージの音声再生
+    if use_audio_io and can_use_gcp_voice and system_change_message:
+        audio_output = synthesize_text_gcp(system_change_message)
+        if audio_output:
+            st.audio(audio_output, format="audio/mp3", autoplay=True)
 
 # --- 既存のチャット履歴を表示 ---
 for message in st.session_state.messages:
@@ -142,10 +261,10 @@ for message in st.session_state.messages:
 
 # --- ユーザーからの入力を受け付ける ---
 user_input_prompt = ""
-if use_audio_input:
+if use_audio_io:
     st.write("Click the mic and speak!")
     audio_bytes = None
-    if mic_recorder:
+    if mic_recorder: # mic_recorder が利用可能かチェック
         recorded_audio = mic_recorder(
             start_prompt="🎤 Start recording",
             stop_prompt="⏹️ Stop recording",
@@ -156,28 +275,21 @@ if use_audio_input:
         if recorded_audio:
             audio_bytes = recorded_audio['bytes']
 
-    if audio_bytes and openai_client:
-        with st.spinner("Transcribing audio..."):
-            try:
-                audio_file = io.BytesIO(audio_bytes)
-                audio_file.name = "audio.wav"
-                
-                transcript = openai_client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=audio_file,
-                    language="en"
-                )
-                user_input_prompt = transcript.text
+    if audio_bytes and can_use_gcp_voice:
+        with st.spinner("Processing audio and transcribing..."):
+            user_input_prompt = transcribe_audio_gcp(audio_bytes)
+            if user_input_prompt:
                 st.write(f"You said: {user_input_prompt}")
-            except Exception as e:
-                st.error(f"Error transcribing audio: {e}")
-                user_input_prompt = ""
+            else:
+                st.warning("Could not transcribe audio. Please try speaking clearer.")
     
-    if not user_input_prompt:
+    # 音声入力が成功しなかった場合、または音声入力が無効な場合はテキスト入力フォームを表示
+    if not user_input_prompt: # user_input_prompt が空の場合
         user_input_prompt = st.chat_input("Start practicing English with me! (Or use mic above)", disabled=bool(audio_bytes))
 
-else:
+else: # use_audio_io が False の場合
     user_input_prompt = st.chat_input("Start practicing English with me! (Type here)")
+
 
 if user_input_prompt:
     st.session_state.messages.append({"role": "user", "content": user_input_prompt})
@@ -189,11 +301,11 @@ if user_input_prompt:
         full_response = ""
 
         gemini_chat_history = []
-        # Exclude initial message when reconstructing chat history for Gemini
         for msg in st.session_state.messages:
             if msg["role"] == "user":
                 gemini_chat_history.append({"role": "user", "parts": [msg["content"]]})
             elif msg["role"] == "assistant":
+                # レベル変更時のシステムメッセージは履歴に含めない
                 if "Okay, switching to the " not in msg["content"]: 
                     gemini_chat_history.append({"role": "model", "parts": [msg["content"]]})
 
@@ -201,15 +313,21 @@ if user_input_prompt:
         chat = model.start_chat(history=gemini_chat_history)
 
         try:
-            response = chat.send_message(user_input_prompt, stream=True)
+            response_generator = chat.send_message(user_input_prompt, stream=True)
 
-            for chunk in response:
+            for chunk in response_generator:
                 full_response += chunk.text
                 message_placeholder.markdown(full_response + "▌")
                 time.sleep(0.05)
             message_placeholder.markdown(full_response)
 
             st.session_state.messages.append({"role": "assistant", "content": full_response})
+
+            # Assistantの返答を音声で再生
+            if use_audio_io and can_use_gcp_voice and full_response:
+                audio_output = synthesize_text_gcp(full_response)
+                if audio_output:
+                    st.audio(audio_output, format="audio/mp3", autoplay=True)
 
         except Exception as e:
             st.error(f"An error occurred with Gemini: {e}. Please try again.")
