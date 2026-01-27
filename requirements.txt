@@ -1,0 +1,3 @@
+# my_chatbot_app/requirements.txt
+streamlit
+google-generativeai
