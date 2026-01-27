@@ -123,6 +123,12 @@ def transcribe_audio_gcp(audio_bytes):
 
         st.info(f"Original audio duration: {len(audio_segment)/1000:.2f}s, Trimmed audio duration: {len(trimmed_audio)/1000:.2f}s")
 
+        # --- ここから修正 ---
+        # pydub.AudioSegment のサンプル幅を16-bit (2バイト) に設定
+        # GCP Speech-to-Text が LINEAR16 (16-bit PCM) を要求するため
+        trimmed_audio = trimmed_audio.set_sample_width(2) # 2 bytes = 16 bits
+        # --- 修正ここまで ---
+
         # 再びバイト列に変換 (WAV形式でヘッダを付与して送るのが最も確実)
         trimmed_audio_bytes = trimmed_audio.export(format="wav").read()
 
