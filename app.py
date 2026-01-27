@@ -243,7 +243,7 @@ with st.sidebar:
     # 音声入力/出力のON/OFFトグル (GCPクライアントが初期化できた場合のみ有効)
     use_audio_io = st.toggle("Enable Voice Input/Output (GCP)", value=False, key="audio_io_toggle", disabled=not _can_use_gcp_voice)
 
-    if use_audio_io and (mic_recorder is None or not can_use_gcp_voice):
+    if use_audio_io and (mic_recorder is None or not _can_use_gcp_voice):
         st.warning("音声入出力は、`streamlit-mic-recorder` ライブラリが不足しているか、GCP認証情報が正しく設定されていないため無効です。")
     elif not use_audio_io:
         st.info("音声入出力は現在無効です。設定で有効にできます。")
@@ -272,7 +272,7 @@ if "messages" not in st.session_state:
     st.session_state.messages.append({"role": "assistant", "content": initial_message})
 
     # 初回メッセージの音声再生
-    if use_audio_io and can_use_gcp_voice and initial_message:
+    if use_audio_io and _can_use_gcp_voice and initial_message:
         audio_output = synthesize_text_gcp(initial_message)
         if audio_output:
             st.audio(audio_output, format="audio/mp3", autoplay=True)
@@ -294,7 +294,7 @@ if st.session_state.get("previous_english_level") != english_level:
     st.session_state.previous_english_level = english_level
 
     # レベル変更時のメッセージの音声再生
-    if use_audio_io and can_use_gcp_voice and system_change_message:
+    if use_audio_io and _can_use_gcp_voice and system_change_message:
         audio_output = synthesize_text_gcp(system_change_message)
         if audio_output:
             st.audio(audio_output, format="audio/mp3", autoplay=True)
@@ -320,7 +320,7 @@ if use_audio_io:
         if recorded_audio:
             audio_bytes = recorded_audio['bytes']
 
-    if audio_bytes and can_use_gcp_voice:
+    if audio_bytes and _can_use_gcp_voice:
         with st.spinner("Processing audio and transcribing..."):
             user_input_prompt = transcribe_audio_gcp(audio_bytes)
             if user_input_prompt:
@@ -369,7 +369,7 @@ if user_input_prompt:
             st.session_state.messages.append({"role": "assistant", "content": full_response})
 
             # Assistantの返答を音声で再生
-            if use_audio_io and can_use_gcp_voice and full_response:
+            if use_audio_io and _can_use_gcp_voice and full_response:
                 audio_output = synthesize_text_gcp(full_response)
                 if audio_output:
                     st.audio(audio_output, format="audio/mp3", autoplay=True)
