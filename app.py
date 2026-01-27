@@ -1,17 +1,13 @@
 import streamlit as st
 import google.generativeai as genai
-import os
-import time # Streamlitのメッセージ表示で自然な間隔を空けるため
+# import os # os はもう不要かもしれません
 
-# 0. 環境変数の設定 (Streamlit Cloudなどでデプロイする場合も考慮)
-# Streamlitでは環境変数をsecretsとして管理することもできますが、
-# ローカル実行時はOSの環境変数から取得します。
-api_key = os.getenv("GEMINI_API_KEY")
-if not api_key:
-    # StreamlitのSecretsからAPIキーを取得 (デプロイ時推奨)
-    # st.secrets["GEMINI_API_KEY"] のようにアクセスします。
-    # ここでは仮に環境変数がない場合のメッセージを表示
-    st.error("エラー: GEMINI_API_KEY 環境変数が設定されていません。")
+# 0. 環境変数の設定 (Streamlit Cloudでの推奨方法)
+# `st.secrets` から API キーを取得
+try:
+    api_key = st.secrets["GEMINI_API_KEY"]
+except KeyError:
+    st.error("エラー: GEMINI_API_KEY が Streamlit Secrets に設定されていません。")
     st.stop() # アプリの実行を停止
 
 genai.configure(api_key=api_key)
