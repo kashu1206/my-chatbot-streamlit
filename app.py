@@ -1,3 +1,4 @@
+import base64
 import streamlit as st
 import time
 import google.generativeai as genai
@@ -249,7 +250,7 @@ with st.sidebar:
     )
 
     # 音声入力/出力のON/OFFトグル (GCPクライアントが初期化できた場合のみ有効)
-    use_audio_io = st.toggle("Enable Voice Input/Output (GCP)", value=False, key="audio_io_toggle", disabled=not can_use_gcp_voice)
+    use_audio_io = st.toggle("Enable Voice Input/Output (GCP)", value=False, key="audio_io_toggle", disabled=not _can_use_gcp_voice)
 
     if use_audio_io and (mic_recorder is None or not can_use_gcp_voice):
         st.warning("音声入出力は、`streamlit-mic-recorder` ライブラリが不足しているか、GCP認証情報が正しく設定されていないため無効です。")
