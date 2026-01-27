@@ -1,4 +1,5 @@
 import streamlit as st
+import time
 import google.generativeai as genai
 # import os # os はもう不要かもしれません
 
