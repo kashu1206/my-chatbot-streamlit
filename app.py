@@ -43,7 +43,6 @@ try:
     if "GCP_CREDENTIALS_BASE64" in st.secrets:
         encoded_credentials = st.secrets["GCP_CREDENTIALS_BASE64"]
         _decoded_gcp_credentials_json_string = base64.b64decode(encoded_credentials.encode("utf-8")).decode("utf-8")
-        st.sidebar.success("GCP Credentials loaded successfully from Base64 secret!")
 
     # 2. 直接JSON文字列として設定された認証情報
     elif "GCP_CREDENTIALS" in st.secrets:
@@ -52,7 +51,6 @@ try:
             _decoded_gcp_credentials_json_string = json.dumps(raw_credentials)
         else:
             _decoded_gcp_credentials_json_string = raw_credentials
-        st.sidebar.success("GCP Credentials loaded successfully from direct secret!")
     
     # 3. 以前の `GCP_SERVICE_ACCOUNT_KEY` との互換性のため
     elif "GCP_SERVICE_ACCOUNT_KEY" in st.secrets:
@@ -123,7 +121,7 @@ def transcribe_audio_gcp(audio_bytes):
         for start_ms, end_ms in nonsilent_chunks:
             trimmed_audio += audio_segment[start_ms:end_ms]
 
-        st.info(f"Original audio duration: {len(audio_segment)/1000:.2f}s, Trimmed audio duration: {len(trimmed_audio)/1000:.2f}s")
+        # st.info(f"Original audio duration: {len(audio_segment)/1000:.2f}s, Trimmed audio duration: {len(trimmed_audio)/1000:.2f}s")
 
         # pydub.AudioSegment のサンプル幅を16-bit (2バイト) に設定
         trimmed_audio = trimmed_audio.set_sample_width(2)
@@ -259,14 +257,10 @@ with st.sidebar:
     )
 
     # 音声入力/出力のON/OFFトグル (GCPクライアントが初期化できた場合のみ有効)
-    use_audio_io = st.toggle("Enable Voice Input/Output (GCP)", value=False, key="audio_io_toggle", disabled=not _can_use_gcp_voice)
+    use_audio_io = st.toggle("音声入出力", value=False, key="audio_io_toggle", disabled=not _can_use_gcp_voice)
 
     if use_audio_io and (mic_recorder is None or not _can_use_gcp_voice): # mic_recorderの利用可能性とGCP音声利用可能性の両方を確認
         st.warning("音声入出力は、`streamlit-mic-recorder` ライブラリが不足しているか、GCP認証情報が正しく設定されていないため無効です。")
-    elif not use_audio_io:
-        st.info("音声入出力は現在無効です。設定で有効にできます。")
-
-    st.info("The AI will always respond in English, based on your selected level.")
 
 # --- モデルの初期化 (レベル選択に応じて system_instruction を設定) ---
 current_system_instruction = get_system_instruction(english_level)
@@ -345,7 +339,7 @@ if use_audio_io:
         with st.spinner("Processing audio and transcribing..."):
             user_input_from_mic = transcribe_audio_gcp(audio_bytes)
             if user_input_from_mic:
-                st.write(f"You said: {user_input_from_mic}")
+                # st.write(f"You said: {user_input_from_mic}")
             else:
                 st.warning("Could not transcribe audio. Please try speaking clearer, or use text input below.")
     elif audio_bytes and not _can_use_gcp_voice: # 音声データがあるがGCPが使えない場合
