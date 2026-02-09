@@ -332,9 +332,32 @@ if use_audio_io:
             just_once=True,
             use_container_width=True,
             key='user_mic_input'
+            # format="audio/webm", # ★ mic_recorder の format は指定せずにデフォルトで試すか "audio/webm" にしてください ★
+            # sample_rate=44100,
         )
         if recorded_audio:
             audio_bytes = recorded_audio['bytes']
+
+            # --- ここからデバッグコードを挿入 ---
+            st.info("--- iPhoneデバッグ情報 ---")
+            if audio_bytes: # audio_bytesがNoneではないことを確認
+                st.write(f"mic_recorderから返された音声データのバイト長: {len(audio_bytes)} bytes")
+
+                if len(audio_bytes) > 0:
+                    st.write(f"音声データの先頭16バイト（16進数）: {audio_bytes[:16].hex()}")
+                    try:
+                        # ここは mic_recorder がデフォルトで出力する形式に合わせる
+                        # Windowsで動作した形式に合わせて、まずは "audio/webm" で試してください。
+                        st.audio(audio_bytes, format="audio/webm")
+                        st.info("デバッグ情報: `st.audio` で再生を試みました。再生できましたか？")
+                    except Exception as e:
+                        st.error(f"デバッグ情報: `st.audio` での再生時にエラーが発生しました: {e}")
+                else:
+                    st.warning("デバッグ情報: mic_recorderから空のバイト列が返されました。")
+            else:
+                st.warning("デバッグ情報: audio_bytesがNoneです。")
+            st.info("--- デバッグ情報ここまで ---")
+            # --- デバッグコードここまで ---
 
     if audio_bytes and _can_use_gcp_voice:
         with st.spinner("Processing audio and transcribing..."):
@@ -350,6 +373,8 @@ if use_audio_io:
 
 else: # use_audio_io が False の場合
     user_input_prompt = st.chat_input("Start practicing English with me! (Type here)")
+
+# ... (以降のコードは変更なし) ...
 
 
 if user_input_prompt:
