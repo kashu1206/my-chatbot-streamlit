@@ -1,4 +1,4 @@
-import base64 # <-- これが以前インポートされていなかった問題に対する修正（今回は既に修正済みと仮定）
+import base64
 import streamlit as st
 import time
 import google.generativeai as genai
@@ -7,30 +7,46 @@ import os
 import json
 import tempfile
 
-
-# GCP Speech-to-Text and Text-to-Speech clients
+# --------------------------------------------------------
+# ★修正：GCP Speech-to-Text and Text-to-Speech clients のインポートを先に移動し、
+# texttospeech のインポート方法を変更します。
+# --------------------------------------------------------
 from google.cloud import speech_v1p1beta1 as speech
-from google.cloud import texttospeech_v1 as texttospeech
-from google.oauth2 import service_account
+# 以前: from google.cloud import texttospeech_v1 as texttospeech
+# 変更: google.cloud.texttospeech パッケージ全体をインポート
+from google.cloud import texttospeech 
+# --------------------------------------------------------
+
+
+# --------------------------------------------------------
+# ★修正：デバッグコード内の参照を 'texttospeech' に変更します。
+# --------------------------------------------------------
+try:
+    # 'google.cloud.texttospeech.__version__' ではなく、インポートした 'texttospeech.__version__' を使います
+    tts_version = texttospeech.__version__
+    st.sidebar.info(f"Installed google-cloud-texttospeech version: {tts_version}")
+except AttributeError:
+    st.sidebar.warning("Could not determine google-cloud-texttospeech version (or __version__ attribute missing from 'texttospeech').")
+except NameError: # 念のため追加
+    st.sidebar.warning("Failed to import 'texttospeech' for version check.")
+
+
+st.sidebar.info("Available AudioEncoding attributes:")
+try:
+    # 'google.cloud.texttospeech.AudioEncoding' ではなく、インポートした 'texttospeech.AudioEncoding' を使います
+    for name, member in texttospeech.AudioEncoding.__members__.items():
+        st.sidebar.info(f"- {name}")
+except AttributeError as e:
+    st.sidebar.warning(f"Could not list AudioEncoding attributes (possibly old version or AudioEncoding not found): {e}")
+except NameError: # 念のため追加
+    st.sidebar.warning("Failed to import 'texttospeech' for AudioEncoding check.")
+# --------------------------------------------------------
+
 
 # VAD (Voice Activity Detection) libraries
 from pydub import AudioSegment
 from pydub.silence import detect_nonsilent
 
-try:
-    tts_version = google.cloud.texttospeech.__version__
-    st.sidebar.info(f"Installed google-cloud-texttospeech version: {tts_version}")
-except AttributeError:
-    st.sidebar.warning("Could not determine google-cloud-texttospeech version.")
-
-# AudioEncoding 内の属性を列挙して確認（デバッグ用）
-st.sidebar.info("Available AudioEncoding attributes:")
-try:
-    for name, member in google.cloud.texttospeech.AudioEncoding.__members__.items():
-        st.sidebar.info(f"- {name}")
-except AttributeError:
-    st.sidebar.warning("Could not list AudioEncoding attributes (possibly old version).")
-    
 try:
     from streamlit_mic_recorder import mic_recorder
 except ImportError:
