@@ -101,7 +101,7 @@ def transcribe_audio_gcp(audio_bytes):
 
     try:
         # pydubでオーディオバイトをロード (streamlit-mic-recorderは通常webm形式で出力)
-        audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes), format="wav")
+        audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes), format="webm")
         
         # 16kHz, 1チャンネルに変換 (GCP Speech-to-Textの推奨)
         if audio_segment.frame_rate != SAMPLE_RATE or audio_segment.channels != 1:
