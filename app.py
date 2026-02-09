@@ -1,4 +1,4 @@
-import base64
+import base64 # <-- これが以前インポートされていなかった問題に対する修正（今回は既に修正済みと仮定）
 import streamlit as st
 import time
 import google.generativeai as genai
@@ -7,41 +7,10 @@ import os
 import json
 import tempfile
 
-# --------------------------------------------------------
-# ★修正：GCP Speech-to-Text and Text-to-Speech clients のインポートを先に移動し、
-# texttospeech のインポート方法を変更します。
-# --------------------------------------------------------
+# GCP Speech-to-Text and Text-to-Speech clients
 from google.cloud import speech_v1p1beta1 as speech
-# 以前: from google.cloud import texttospeech_v1 as texttospeech
-# 変更: google.cloud.texttospeech パッケージ全体をインポート
-from google.cloud import texttospeech 
-# --------------------------------------------------------
-
-
-# --------------------------------------------------------
-# ★修正：デバッグコード内の参照を 'texttospeech' に変更します。
-# --------------------------------------------------------
-try:
-    # 'google.cloud.texttospeech.__version__' ではなく、インポートした 'texttospeech.__version__' を使います
-    tts_version = texttospeech.__version__
-    st.sidebar.info(f"Installed google-cloud-texttospeech version: {tts_version}")
-except AttributeError:
-    st.sidebar.warning("Could not determine google-cloud-texttospeech version (or __version__ attribute missing from 'texttospeech').")
-except NameError: # 念のため追加
-    st.sidebar.warning("Failed to import 'texttospeech' for version check.")
-
-
-st.sidebar.info("Available AudioEncoding attributes:")
-try:
-    # 'google.cloud.texttospeech.AudioEncoding' ではなく、インポートした 'texttospeech.AudioEncoding' を使います
-    for name, member in texttospeech.AudioEncoding.__members__.items():
-        st.sidebar.info(f"- {name}")
-except AttributeError as e:
-    st.sidebar.warning(f"Could not list AudioEncoding attributes (possibly old version or AudioEncoding not found): {e}")
-except NameError: # 念のため追加
-    st.sidebar.warning("Failed to import 'texttospeech' for AudioEncoding check.")
-# --------------------------------------------------------
-
+from google.cloud import texttospeech_v1 as texttospeech
+from google.oauth2 import service_account
 
 # VAD (Voice Activity Detection) libraries
 from pydub import AudioSegment
@@ -194,7 +163,7 @@ def synthesize_text_gcp(text):
             ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
         )
         audio_config = texttospeech.AudioConfig(
-            audio_encoding=texttospeech.AudioEncoding.MP4_AUDIO,
+            audio_encoding=texttospeech.AudioEncoding.M4A,
             speaking_rate=1.0, # 話速 (1.0が標準)
         )
 
@@ -203,15 +172,7 @@ def synthesize_text_gcp(text):
         )
         return response.audio_content # MP4バイト列
     except Exception as e:
-        # 例外のタイプとメッセージをより詳細に表示
-        error_message = f"Error synthesizing speech with Google Cloud Text-to-Speech API: {type(e).__name__}: {e}"
-        st.error(error_message)
-
-        # デバッグのために、より詳細なスタックトレースも表示させる
-        import traceback
-        st.error("Traceback:")
-        st.code(traceback.format_exc()) # スタックトレースを整形して表示
-
+        st.error(f"Error synthesizing speech with Google Cloud Text-to-Speech API: {e}")
         return None
 
 # --- Geminiモデルの初期化 ---
