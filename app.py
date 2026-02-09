@@ -338,8 +338,9 @@ if use_audio_io:
     if audio_bytes and _can_use_gcp_voice:
         with st.spinner("Processing audio and transcribing..."):
             user_input_from_mic = transcribe_audio_gcp(audio_bytes)
-            # if user_input_from_mic:
+            if user_input_from_mic:
                 # st.write(f"You said: {user_input_from_mic}")
+                pass
             else:
                 st.warning("Could not transcribe audio. Please try speaking clearer, or use text input below.")
     elif audio_bytes and not _can_use_gcp_voice: # 音声データがあるがGCPが使えない場合
