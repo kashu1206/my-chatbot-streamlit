@@ -171,6 +171,7 @@ def synthesize_text_gcp(text):
             input=synthesis_input, voice=voice, audio_config=audio_config
         )
         return response.audio_content # MP4バイト列
+    except Exception as e:
         # 例外のタイプとメッセージをより詳細に表示
         error_message = f"Error synthesizing speech with Google Cloud Text-to-Speech API: {type(e).__name__}: {e}"
         st.error(error_message)
