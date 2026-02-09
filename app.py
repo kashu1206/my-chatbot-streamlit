@@ -163,7 +163,7 @@ def synthesize_text_gcp(text):
             ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
         )
         audio_config = texttospeech.AudioConfig(
-            audio_encoding=texttospeech.AudioEncoding.M4A,
+            audio_encoding=texttospeech.AudioEncoding.MP3,
             speaking_rate=1.0,
         )
 
@@ -287,7 +287,7 @@ if "messages" not in st.session_state:
     if use_audio_io and _can_use_gcp_voice and initial_message:
         audio_output = synthesize_text_gcp(initial_message)
         if audio_output:
-            st.audio(audio_output, format="audio/mp4", autoplay=True)
+            st.audio(audio_output, format="audio/mpeg", autoplay=True)
 
 
 if st.session_state.get("previous_english_level") != english_level:
@@ -309,7 +309,7 @@ if st.session_state.get("previous_english_level") != english_level:
     if use_audio_io and _can_use_gcp_voice and system_change_message:
         audio_output = synthesize_text_gcp(system_change_message)
         if audio_output:
-            st.audio(audio_output, format="audio/mp4", autoplay=True)
+            st.audio(audio_output, format="audio/mpeg", autoplay=True)
 
 # --- 既存のチャット履歴を表示 ---
 for message in st.session_state.messages:
@@ -395,7 +395,7 @@ if final_user_input_prompt: # ★ここを final_user_input_prompt に変更★
             if use_audio_io and _can_use_gcp_voice and full_response:
                 audio_output = synthesize_text_gcp(full_response)
                 if audio_output:
-                    st.audio(audio_output, format="audio/mp4", autoplay=True)
+                    st.audio(audio_output, format="audio/mpeg", autoplay=True)
 
         except Exception as e:
             st.error(f"An error occurred with Gemini: {e}. Please try again.")
