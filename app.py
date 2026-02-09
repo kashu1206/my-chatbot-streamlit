@@ -16,6 +16,38 @@ from google.oauth2 import service_account
 from pydub import AudioSegment
 from pydub.silence import detect_nonsilent
 
+gcp_service_account_key_json = st.secrets.get("GCP_SERVICE_ACCOUNT_KEY")
+
+_tts_client = None
+_stt_client = None
+
+if gcp_service_account_key_json:
+    try:
+        # JSON文字列を辞書にパース
+        service_account_info = json.loads(gcp_service_account_key_json)
+        
+        # 認証情報をロード
+        credentials = service_account.Credentials.from_service_account_info(service_account_info)
+        
+        # クライアントを初期化（グローバル変数として定義）
+        _tts_client = texttospeech.TextToSpeechClient(credentials=credentials)
+        _stt_client = speech.SpeechClient(credentials=credentials)
+        st.sidebar.info("GCP clients initialized with service account.")
+        
+    except json.JSONDecodeError:
+        st.sidebar.error("Error decoding GCP_SERVICE_ACCOUNT_KEY JSON. Please check your Secret.")
+    except Exception as e:
+        st.sidebar.error(f"Error initializing GCP clients: {e}")
+else:
+    st.sidebar.warning("GCP_SERVICE_ACCOUNT_KEY not found in Streamlit Secrets. Attempting default credentials.")
+    try:
+        # Secretsがない場合、デフォルトの認証（例: 環境変数 GOOGLE_APPLICATION_CREDENTIALS）を使用
+        _tts_client = texttospeech.TextToSpeechClient()
+        _stt_client = speech.SpeechClient()
+        st.sidebar.info("GCP clients initialized with default credentials.")
+    except Exception as e:
+        st.sidebar.error(f"Failed to initialize GCP clients with default credentials: {e}")
+
 try:
     from streamlit_mic_recorder import mic_recorder
 except ImportError:
