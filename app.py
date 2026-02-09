@@ -163,11 +163,11 @@ def synthesize_text_gcp(text):
             ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
         )
         audio_config = texttospeech.AudioConfig(
-            audio_encoding=texttospeech.AudioEncoding.MP3,
+            audio_encoding=texttospeech.AudioEncoding.MP4_AUDIO
             speaking_rate=1.0, # 話速 (1.0が標準)
         )
 
-        response = _texttospeech_client.synthesize_speech(
+        response = _tts_client.synthesize_speech(
             input=synthesis_input, voice=voice, audio_config=audio_config
         )
         return response.audio_content # MP3バイト列
@@ -291,7 +291,7 @@ if "messages" not in st.session_state:
     if use_audio_io and _can_use_gcp_voice and initial_message:
         audio_output = synthesize_text_gcp(initial_message)
         if audio_output:
-            st.audio(audio_output, format="audio/mp3", autoplay=True)
+            st.audio(audio_output, format="audio/mp4", autoplay=True)
 
 
 if st.session_state.get("previous_english_level") != english_level:
@@ -313,7 +313,7 @@ if st.session_state.get("previous_english_level") != english_level:
     if use_audio_io and _can_use_gcp_voice and system_change_message:
         audio_output = synthesize_text_gcp(system_change_message)
         if audio_output:
-            st.audio(audio_output, format="audio/mp3", autoplay=True)
+            st.audio(audio_output, format="audio/mp4", autoplay=True)
 
 # --- 既存のチャット履歴を表示 ---
 for message in st.session_state.messages:
@@ -413,7 +413,7 @@ if user_input_prompt:
             if use_audio_io and _can_use_gcp_voice and full_response:
                 audio_output = synthesize_text_gcp(full_response)
                 if audio_output:
-                    st.audio(audio_output, format="audio/mp3", autoplay=True)
+                    st.audio(audio_output, format="audio/mp4", autoplay=True)
 
         except Exception as e:
             st.error(f"An error occurred with Gemini: {e}. Please try again.")
