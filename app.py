@@ -81,7 +81,7 @@ try:
         _stt_client = speech.SpeechClient(credentials=credentials)
         _tts_client = texttospeech.TextToSpeechClient(credentials=credentials)
         _can_use_gcp_voice = True
-        st.sidebar.info("GCP Speech-to-Text and Text-to-Speech clients initialized from secrets.")
+        # st.sidebar.info("GCP Speech-to-Text and Text-to-Speech clients initialized from secrets.")
 
 except json.JSONDecodeError as e:
     st.sidebar.error(f"Error decoding GCP credentials JSON: {e}. Please check your Secret format.")
