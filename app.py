@@ -7,6 +7,20 @@ import os
 import json
 import tempfile
 
+try:
+    tts_version = google.cloud.texttospeech.__version__
+    st.sidebar.info(f"Installed google-cloud-texttospeech version: {tts_version}")
+except AttributeError:
+    st.sidebar.warning("Could not determine google-cloud-texttospeech version.")
+
+# AudioEncoding 内の属性を列挙して確認（デバッグ用）
+st.sidebar.info("Available AudioEncoding attributes:")
+try:
+    for name, member in google.cloud.texttospeech.AudioEncoding.__members__.items():
+        st.sidebar.info(f"- {name}")
+except AttributeError:
+    st.sidebar.warning("Could not list AudioEncoding attributes (possibly old version).")
+
 # GCP Speech-to-Text and Text-to-Speech clients
 from google.cloud import speech_v1p1beta1 as speech
 from google.cloud import texttospeech_v1 as texttospeech

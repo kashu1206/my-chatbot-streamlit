@@ -1,7 +1,7 @@
 # my_chatbot_app/requirements.txt
 streamlit
 streamlit-mic-recorder
-google-cloud-texttospeech==2.34.0
+google-cloud-texttospeech
 google-cloud-speech
 google-generativeai
 pydub
