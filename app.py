@@ -171,8 +171,15 @@ def synthesize_text_gcp(text):
             input=synthesis_input, voice=voice, audio_config=audio_config
         )
         return response.audio_content # MP4バイト列
-    except Exception as e:
-        st.error(f"Error synthesizing speech with Google Cloud Text-to-Speech API: {e}")
+        # 例外のタイプとメッセージをより詳細に表示
+        error_message = f"Error synthesizing speech with Google Cloud Text-to-Speech API: {type(e).__name__}: {e}"
+        st.error(error_message)
+
+        # デバッグのために、より詳細なスタックトレースも表示させる
+        import traceback
+        st.error("Traceback:")
+        st.code(traceback.format_exc()) # スタックトレースを整形して表示
+
         return None
 
 # --- Geminiモデルの初期化 ---
