@@ -7,6 +7,16 @@ import os
 import json
 import tempfile
 
+
+# GCP Speech-to-Text and Text-to-Speech clients
+from google.cloud import speech_v1p1beta1 as speech
+from google.cloud import texttospeech_v1 as texttospeech
+from google.oauth2 import service_account
+
+# VAD (Voice Activity Detection) libraries
+from pydub import AudioSegment
+from pydub.silence import detect_nonsilent
+
 try:
     tts_version = google.cloud.texttospeech.__version__
     st.sidebar.info(f"Installed google-cloud-texttospeech version: {tts_version}")
@@ -20,16 +30,7 @@ try:
         st.sidebar.info(f"- {name}")
 except AttributeError:
     st.sidebar.warning("Could not list AudioEncoding attributes (possibly old version).")
-
-# GCP Speech-to-Text and Text-to-Speech clients
-from google.cloud import speech_v1p1beta1 as speech
-from google.cloud import texttospeech_v1 as texttospeech
-from google.oauth2 import service_account
-
-# VAD (Voice Activity Detection) libraries
-from pydub import AudioSegment
-from pydub.silence import detect_nonsilent
-
+    
 try:
     from streamlit_mic_recorder import mic_recorder
 except ImportError:
