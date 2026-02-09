@@ -163,14 +163,14 @@ def synthesize_text_gcp(text):
             ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
         )
         audio_config = texttospeech.AudioConfig(
-            audio_encoding=texttospeech.AudioEncoding.MP4_AUDIO
+            audio_encoding=texttospeech.AudioEncoding.MP4_AUDIO,
             speaking_rate=1.0, # 話速 (1.0が標準)
         )
 
         response = _tts_client.synthesize_speech(
             input=synthesis_input, voice=voice, audio_config=audio_config
         )
-        return response.audio_content # MP3バイト列
+        return response.audio_content # MP4バイト列
     except Exception as e:
         st.error(f"Error synthesizing speech with Google Cloud Text-to-Speech API: {e}")
         return None
