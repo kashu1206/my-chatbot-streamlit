@@ -1,52 +1,19 @@
-import base64 # <-- これが以前インポートされていなかった問題に対する修正（今回は既に修正済みと仮定）
+import base64
 import streamlit as st
 import time
 import google.generativeai as genai
 import io
 import os
 import json
-import tempfile
 
 # GCP Speech-to-Text and Text-to-Speech clients
 from google.cloud import speech_v1p1beta1 as speech
-from google.cloud import texttospeech_v1 as texttospeech
+from google.cloud import texttospeech
 from google.oauth2 import service_account
 
 # VAD (Voice Activity Detection) libraries
 from pydub import AudioSegment
 from pydub.silence import detect_nonsilent
-
-gcp_service_account_key_json = st.secrets.get("GCP_SERVICE_ACCOUNT_KEY")
-
-_tts_client = None
-_stt_client = None
-
-if gcp_service_account_key_json:
-    try:
-        # JSON文字列を辞書にパース
-        service_account_info = json.loads(gcp_service_account_key_json)
-        
-        # 認証情報をロード
-        credentials = service_account.Credentials.from_service_account_info(service_account_info)
-        
-        # クライアントを初期化（グローバル変数として定義）
-        _tts_client = texttospeech.TextToSpeechClient(credentials=credentials)
-        _stt_client = speech.SpeechClient(credentials=credentials)
-        st.sidebar.info("GCP clients initialized with service account.")
-        
-    except json.JSONDecodeError:
-        st.sidebar.error("Error decoding GCP_SERVICE_ACCOUNT_KEY JSON. Please check your Secret.")
-    except Exception as e:
-        st.sidebar.error(f"Error initializing GCP clients: {e}")
-else:
-    st.sidebar.warning("GCP_SERVICE_ACCOUNT_KEY not found in Streamlit Secrets. Attempting default credentials.")
-    try:
-        # Secretsがない場合、デフォルトの認証（例: 環境変数 GOOGLE_APPLICATION_CREDENTIALS）を使用
-        _tts_client = texttospeech.TextToSpeechClient()
-        _stt_client = speech.SpeechClient()
-        st.sidebar.info("GCP clients initialized with default credentials.")
-    except Exception as e:
-        st.sidebar.error(f"Failed to initialize GCP clients with default credentials: {e}")
 
 try:
     from streamlit_mic_recorder import mic_recorder
@@ -64,115 +31,117 @@ except KeyError:
     st.error("Error: GEMINI_API_KEY is not set in Streamlit Secrets.")
     st.stop() # Gemini APIキーがなければアプリを停止
 
-# --- GCP Credentials (for Speech-to-Text and Text-to-Speech) ---
+# GCPクライアントの初期化変数を定義
+_tts_client = None
+_stt_client = None
 _can_use_gcp_voice = False
-_speech_client = None
-_texttospeech_client = None
-_decoded_gcp_credentials_json_string = None 
-_temp_key_file_path = None # 一時ファイルのパス
+_decoded_gcp_credentials_json_string = None # 認証情報を格納する変数
 
 try:
-    # 優先: Base64エンコードされた認証情報を確認
+    # SecretsからGCP認証情報を読み込む優先順位を設定
+    # 1. Base64エンコードされた認証情報
     if "GCP_CREDENTIALS_BASE64" in st.secrets:
         encoded_credentials = st.secrets["GCP_CREDENTIALS_BASE64"]
         _decoded_gcp_credentials_json_string = base64.b64decode(encoded_credentials.encode("utf-8")).decode("utf-8")
-        st.success("GCP Credentials loaded successfully from Base64 secret!")
+        st.sidebar.success("GCP Credentials loaded successfully from Base64 secret!")
 
-    # フォールバック: 直接GCP_CREDENTIALSがJSON文字列として設定されている場合
+    # 2. 直接JSON文字列として設定された認証情報
     elif "GCP_CREDENTIALS" in st.secrets:
         raw_credentials = st.secrets["GCP_CREDENTIALS"]
-        if isinstance(raw_credentials, dict): # 既に辞書型の場合
+        if isinstance(raw_credentials, dict):
             _decoded_gcp_credentials_json_string = json.dumps(raw_credentials)
-        else: # 文字列の場合
+        else:
             _decoded_gcp_credentials_json_string = raw_credentials
-        st.success("GCP Credentials loaded successfully from direct secret!")
+        st.sidebar.success("GCP Credentials loaded successfully from direct secret!")
     
+    # 3. 以前の `GCP_SERVICE_ACCOUNT_KEY` との互換性のため
+    elif "GCP_SERVICE_ACCOUNT_KEY" in st.secrets:
+        gcp_service_account_key_json = st.secrets.get("GCP_SERVICE_ACCOUNT_KEY")
+        if gcp_service_account_key_json:
+            service_account_info = json.loads(gcp_service_account_key_json)
+            _decoded_gcp_credentials_json_string = json.dumps(service_account_info)
+            st.sidebar.success("GCP Credentials loaded successfully from GCP_SERVICE_ACCOUNT_KEY (legacy).")
+
+    # 認証情報がSecretsに見つからなかった場合、デフォルト認証を試みる
     else:
-        st.warning("Warning: GCP_CREDENTIALS (Base64 or direct) for Speech-to-Text/Text-to-Speech are not set in Streamlit Secrets. Voice input/output will not be available.")
-        # GCP認証情報がない場合でもGemini部分は動くように st.stop() は呼ばない
+        st.sidebar.warning("Warning: GCP credentials (GCP_CREDENTIALS_BASE64, GCP_CREDENTIALS, or GCP_SERVICE_ACCOUNT_KEY) not found in Streamlit Secrets. Attempting default credentials.")
+        try:
+            _tts_client = texttospeech.TextToSpeechClient()
+            _stt_client = speech.SpeechClient()
+            _can_use_gcp_voice = True
+            st.sidebar.info("GCP clients initialized with default credentials.")
+        except Exception as e:
+            st.sidebar.error(f"Failed to initialize GCP clients with default credentials: {e}")
+            _can_use_gcp_voice = False
         
-    # 認証情報文字列が存在する場合のみ、GCPクライアントを初期化
+    # 読み込んだ認証情報文字列が存在する場合のみ、GCPクライアントを初期化
     if _decoded_gcp_credentials_json_string:
-        # サービスアカウント情報で認証情報を生成
         _gcp_credentials_info = json.loads(_decoded_gcp_credentials_json_string)
         credentials = service_account.Credentials.from_service_account_info(_gcp_credentials_info)
         
-        # 一時ファイルとしてJSONを保存し、GOOGLE_APPLICATION_CREDENTIALS 環境変数を設定
-        # これは、`service_account.Credentials` を直接渡す場合でも、
-        # 他のGoogle Cloudライブラリが環境変数を参照する可能性に備えるためです。
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="utf-8") as temp_key_file:
-            temp_key_file.write(_decoded_gcp_credentials_json_string)
-            _temp_key_file_path = temp_key_file.name
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = _temp_key_file_path
-
-        # GCPクライアントを初期化
-        _speech_client = speech.SpeechClient(credentials=credentials)
-        _texttospeech_client = texttospeech.TextToSpeechClient(credentials=credentials)
+        # GCPクライアントを初期化（グローバル変数 _stt_client と _tts_client を使用）
+        _stt_client = speech.SpeechClient(credentials=credentials)
+        _tts_client = texttospeech.TextToSpeechClient(credentials=credentials)
         _can_use_gcp_voice = True
-        st.info("GCP Speech-to-Text and Text-to-Speech clients initialized.")
+        st.sidebar.info("GCP Speech-to-Text and Text-to-Speech clients initialized from secrets.")
 
+except json.JSONDecodeError as e:
+    st.sidebar.error(f"Error decoding GCP credentials JSON: {e}. Please check your Secret format.")
+    _can_use_gcp_voice = False
 except Exception as e:
-    st.error(f"Critical error during GCP credentials setup: {e}")
-    st.warning("Voice input/output will not be available due to GCP client initialization failure.")
+    st.sidebar.error(f"Critical error during GCP client setup: {e}")
     _can_use_gcp_voice = False
 
-# --- アプリ終了時に一時ファイルをクリーンアップ ---
-# Streamlitのライフサイクルとtempfileの削除タイミングは複雑ですが、
-# Streamlit Cloudではアプリの再起動時にファイルシステムがクリーンアップされるため、
-# 明示的な os.remove(_temp_key_file_path) は必須ではないかもしれません。
-# ローカルで実行していて、確実に削除したい場合は考慮します。
+if not _can_use_gcp_voice:
+    st.warning("Voice input/output will not be available due to GCP client initialization failure.")
 
 # --- 音声処理 (無音検出・トリミング) の設定 ---
 SAMPLE_RATE = 16000  # Streamlit mic recorder は通常16kHzで録音される (GCP Speech-to-Textの推奨)
 
 # --- 音声からテキストへ (Speech-to-Text) ---
 def transcribe_audio_gcp(audio_bytes):
-    if not _speech_client:
-        st.error("Speech-to-Text client is not initialized.")
+    # クライアントが初期化されているか再確認
+    if _stt_client is None:
+        st.error("Speech-to-Text client is not initialized. Cannot transcribe audio.")
         return ""
 
     try:
-        # pydubでオーディオバイトをロード (streamlit-mic-recorderは通常webm形式で出力)
         audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
         
-        # 16kHz, 1チャンネルに変換 (GCP Speech-to-Textの推奨)
         if audio_segment.frame_rate != SAMPLE_RATE or audio_segment.channels != 1:
             audio_segment = audio_segment.set_frame_rate(SAMPLE_RATE).set_channels(1)
         
-        # pydub.silence.detect_nonsilent を使用して無音区間を検出・トリミング
         nonsilent_chunks = detect_nonsilent(audio_segment, 
-                                            min_silence_len=500, # 500ms以上の無音を検出
-                                            silence_thresh=-35)  # -35dBFS以下の音量を無音と判定
+                                            min_silence_len=500,
+                                            silence_thresh=-35)
 
-        if not nonsilent_chunks: # 音声が全く検出されなかった場合
+        if not nonsilent_chunks:
             st.info("No substantial speech detected after trimming.")
             return ""
 
-        # 無音でないチャンクのみを結合
         trimmed_audio = AudioSegment.empty()
         for start_ms, end_ms in nonsilent_chunks:
             trimmed_audio += audio_segment[start_ms:end_ms]
 
         st.info(f"Original audio duration: {len(audio_segment)/1000:.2f}s, Trimmed audio duration: {len(trimmed_audio)/1000:.2f}s")
 
-        # --- ここから修正 ---
         # pydub.AudioSegment のサンプル幅を16-bit (2バイト) に設定
-        # GCP Speech-to-Text が LINEAR16 (16-bit PCM) を要求するため
-        trimmed_audio = trimmed_audio.set_sample_width(2) # 2 bytes = 16 bits
-        # --- 修正ここまで ---
+        trimmed_audio = trimmed_audio.set_sample_width(2)
 
-        # 再びバイト列に変換 (WAV形式でヘッダを付与して送るのが最も確実)
-        trimmed_audio_bytes = trimmed_audio.export(format="wav").read()
+        # ★修正: export() の書き方★
+        output_buffer = io.BytesIO()
+        trimmed_audio.export(output_buffer, format="wav")
+        trimmed_audio_bytes = output_buffer.getvalue()
 
         audio = speech.RecognitionAudio(content=trimmed_audio_bytes)
         config = speech.RecognitionConfig(
-            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16, # WAVなのでLINEAR16
+            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=SAMPLE_RATE,
-            language_code="en-US", # 英語で認識
-            enable_automatic_punctuation=True, # 自動句読点
+            language_code="en-US",
+            enable_automatic_punctuation=True,
         )
 
-        response = _speech_client.recognize(config=config, audio=audio)
+        response = _stt_client.recognize(config=config, audio=audio)
         transcript = ""
         for result in response.results:
             transcript += result.alternatives[0].transcript
@@ -183,26 +152,27 @@ def transcribe_audio_gcp(audio_bytes):
 
 # --- テキストから音声へ (Text-to-Speech) ---
 def synthesize_text_gcp(text):
-    if not _texttospeech_client:
-        st.error("Text-to-Speech client is not initialized.")
+    # クライアントが初期化されているか再確認
+    if _tts_client is None:
+        st.error("Text-to-Speech client is not initialized. Cannot synthesize speech.")
         return None
 
     try:
         synthesis_input = texttospeech.SynthesisInput(text=text)
         voice = texttospeech.VoiceSelectionParams(
-            language_code="en-US", # 英語音声
-            name="en-US-Standard-F", # 標準的な女性の声 (必要に応じて"en-US-Wavenet-F"なども検討)
+            language_code="en-US",
+            name="en-US-Standard-F",
             ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
         )
         audio_config = texttospeech.AudioConfig(
             audio_encoding=texttospeech.AudioEncoding.M4A,
-            speaking_rate=1.0, # 話速 (1.0が標準)
+            speaking_rate=1.0,
         )
 
         response = _tts_client.synthesize_speech(
             input=synthesis_input, voice=voice, audio_config=audio_config
         )
-        return response.audio_content # MP4バイト列
+        return response.audio_content
     except Exception as e:
         st.error(f"Error synthesizing speech with Google Cloud Text-to-Speech API: {e}")
         return None
@@ -210,7 +180,7 @@ def synthesize_text_gcp(text):
 # --- Geminiモデルの初期化 ---
 @st.cache_resource
 def get_gemini_model():
-    return genai.GenerativeModel('gemini-pro')
+    return genai.GenerativeModel('gemini-flash-latest')
 model = get_gemini_model()
 
 # --- キャラクター設定とレベル調整機能 ---
@@ -291,7 +261,7 @@ with st.sidebar:
     # 音声入力/出力のON/OFFトグル (GCPクライアントが初期化できた場合のみ有効)
     use_audio_io = st.toggle("Enable Voice Input/Output (GCP)", value=False, key="audio_io_toggle", disabled=not _can_use_gcp_voice)
 
-    if use_audio_io and (mic_recorder is None or not _can_use_gcp_voice):
+    if use_audio_io and (mic_recorder is None or not _can_use_gcp_voice): # mic_recorderの利用可能性とGCP音声利用可能性の両方を確認
         st.warning("音声入出力は、`streamlit-mic-recorder` ライブラリが不足しているか、GCP認証情報が正しく設定されていないため無効です。")
     elif not use_audio_io:
         st.info("音声入出力は現在無効です。設定で有効にできます。")
@@ -353,7 +323,10 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
 
 # --- ユーザーからの入力を受け付ける ---
-user_input_prompt = ""
+user_input_from_mic = ""   # マイクからの入力結果を保持する変数
+user_input_from_text = ""  # テキスト入力フォームからの結果を保持する変数
+final_user_input_prompt = "" # 最終的にGeminiに送るプロンプト
+
 if use_audio_io:
     st.write("Click the mic and speak!")
     audio_bytes = None
@@ -364,55 +337,38 @@ if use_audio_io:
             just_once=True,
             use_container_width=True,
             key='user_mic_input'
-            # format="audio/webm", # ★ mic_recorder の format は指定せずにデフォルトで試すか "audio/webm" にしてください ★
-            # sample_rate=44100,
         )
         if recorded_audio:
             audio_bytes = recorded_audio['bytes']
 
-            # --- ここからデバッグコードを挿入 ---
-            st.info("--- iPhoneデバッグ情報 ---")
-            if audio_bytes: # audio_bytesがNoneではないことを確認
-                st.write(f"mic_recorderから返された音声データのバイト長: {len(audio_bytes)} bytes")
-
-                if len(audio_bytes) > 0:
-                    st.write(f"音声データの先頭16バイト（16進数）: {audio_bytes[:16].hex()}")
-                    try:
-                        # ここは mic_recorder がデフォルトで出力する形式に合わせる
-                        # Windowsで動作した形式に合わせて、まずは "audio/webm" で試してください。
-                        st.audio(audio_bytes, format="audio/webm")
-                        st.info("デバッグ情報: `st.audio` で再生を試みました。再生できましたか？")
-                    except Exception as e:
-                        st.error(f"デバッグ情報: `st.audio` での再生時にエラーが発生しました: {e}")
-                else:
-                    st.warning("デバッグ情報: mic_recorderから空のバイト列が返されました。")
-            else:
-                st.warning("デバッグ情報: audio_bytesがNoneです。")
-            st.info("--- デバッグ情報ここまで ---")
-            # --- デバッグコードここまで ---
-
     if audio_bytes and _can_use_gcp_voice:
         with st.spinner("Processing audio and transcribing..."):
-            user_input_prompt = transcribe_audio_gcp(audio_bytes)
-            if user_input_prompt:
-                st.write(f"You said: {user_input_prompt}")
+            user_input_from_mic = transcribe_audio_gcp(audio_bytes)
+            if user_input_from_mic:
+                st.write(f"You said: {user_input_from_mic}")
             else:
-                st.warning("Could not transcribe audio. Please try speaking clearer.")
-    
-    # 音声入力が成功しなかった場合、または音声入力が無効な場合はテキスト入力フォームを表示
-    if not user_input_prompt: # user_input_prompt が空の場合
-        user_input_prompt = st.chat_input("Start practicing English with me! (Or use mic above)", disabled=bool(audio_bytes))
+                st.warning("Could not transcribe audio. Please try speaking clearer, or use text input below.")
+    elif audio_bytes and not _can_use_gcp_voice: # 音声データがあるがGCPが使えない場合
+        st.warning("GCP voice services are not enabled. Cannot transcribe recorded audio.")
 
-else: # use_audio_io が False の場合
-    user_input_prompt = st.chat_input("Start practicing English with me! (Type here)")
+    # マイクからの入力があったかどうかにかかわらず、テキスト入力フォームは常に表示・有効
+    # ここでの disabled は常に False となる
+    user_input_from_text = st.chat_input("Start practicing English with me! (Type here)")
 
-# ... (以降のコードは変更なし) ...
+    # 最終的なユーザー入力を決定：マイクからの入力があればそれを優先、なければテキスト入力を使う
+    if user_input_from_mic:
+        final_user_input_prompt = user_input_from_mic
+    elif user_input_from_text:
+        final_user_input_prompt = user_input_from_text
+
+else: # use_audio_io が False の場合 (音声入力が無効な場合)
+    final_user_input_prompt = st.chat_input("Start practicing English with me! (Type here)")
 
 
-if user_input_prompt:
-    st.session_state.messages.append({"role": "user", "content": user_input_prompt})
+if final_user_input_prompt: # ★ここを final_user_input_prompt に変更★
+    st.session_state.messages.append({"role": "user", "content": final_user_input_prompt}) # ★ここを final_user_input_prompt に変更★
     with st.chat_message("user"):
-        st.markdown(user_input_prompt)
+        st.markdown(final_user_input_prompt) # ★ここを final_user_input_prompt に変更★
 
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
@@ -424,14 +380,13 @@ if user_input_prompt:
                 gemini_chat_history.append({"role": "user", "parts": [msg["content"]]})
             elif msg["role"] == "assistant":
                 # レベル変更時のシステムメッセージは履歴に含めない
-                if "Okay, switching to the " not in msg["content"]: 
+                if "Okay, switching to the " not in msg["content"]:
                     gemini_chat_history.append({"role": "model", "parts": [msg["content"]]})
-
 
         chat = model.start_chat(history=gemini_chat_history)
 
         try:
-            response_generator = chat.send_message(user_input_prompt, stream=True)
+            response_generator = chat.send_message(final_user_input_prompt, stream=True) # ★ここを final_user_input_prompt に変更★
 
             for chunk in response_generator:
                 full_response += chunk.text
