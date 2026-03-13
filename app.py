@@ -1,11 +1,10 @@
+import base64
 import streamlit as st
 import time
 import google.generativeai as genai
 import io
 import os
 import json
-import base64
-import random
 
 # GCP Speech-to-Text and Text-to-Speech clients
 from google.cloud import speech_v1p1beta1 as speech
@@ -44,7 +43,6 @@ try:
     if "GCP_CREDENTIALS_BASE64" in st.secrets:
         encoded_credentials = st.secrets["GCP_CREDENTIALS_BASE64"]
         _decoded_gcp_credentials_json_string = base64.b64decode(encoded_credentials.encode("utf-8")).decode("utf-8")
-        st.sidebar.success("GCP Credentials loaded successfully from Base64 secret!")
 
     # 2. 直接JSON文字列として設定された認証情報
     elif "GCP_CREDENTIALS" in st.secrets:
@@ -53,7 +51,6 @@ try:
             _decoded_gcp_credentials_json_string = json.dumps(raw_credentials)
         else:
             _decoded_gcp_credentials_json_string = raw_credentials
-        st.sidebar.success("GCP Credentials loaded successfully from direct secret!")
     
     # 3. 以前の `GCP_SERVICE_ACCOUNT_KEY` との互換性のため
     elif "GCP_SERVICE_ACCOUNT_KEY" in st.secrets:
@@ -84,7 +81,7 @@ try:
         _stt_client = speech.SpeechClient(credentials=credentials)
         _tts_client = texttospeech.TextToSpeechClient(credentials=credentials)
         _can_use_gcp_voice = True
-        st.sidebar.info("GCP Speech-to-Text and Text-to-Speech clients initialized from secrets.")
+        # st.sidebar.info("GCP Speech-to-Text and Text-to-Speech clients initialized from secrets.")
 
 except json.JSONDecodeError as e:
     st.sidebar.error(f"Error decoding GCP credentials JSON: {e}. Please check your Secret format.")
@@ -124,8 +121,12 @@ def transcribe_audio_gcp(audio_bytes):
         for start_ms, end_ms in nonsilent_chunks:
             trimmed_audio += audio_segment[start_ms:end_ms]
 
+        # st.info(f"Original audio duration: {len(audio_segment)/1000:.2f}s, Trimmed audio duration: {len(trimmed_audio)/1000:.2f}s")
+
+        # pydub.AudioSegment のサンプル幅を16-bit (2バイト) に設定
         trimmed_audio = trimmed_audio.set_sample_width(2)
 
+        # ★修正: export() の書き方★
         output_buffer = io.BytesIO()
         trimmed_audio.export(output_buffer, format="wav")
         trimmed_audio_bytes = output_buffer.getvalue()
@@ -134,7 +135,7 @@ def transcribe_audio_gcp(audio_bytes):
         config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=SAMPLE_RATE,
-            language_code="en-US", # 英語会話パートナーなのでen-US
+            language_code="en-US",
             enable_automatic_punctuation=True,
         )
 
@@ -148,7 +149,7 @@ def transcribe_audio_gcp(audio_bytes):
         return ""
 
 # --- テキストから音声へ (Text-to-Speech) ---
-def synthesize_text_gcp(text, voice_name="en-US-Standard-F", ssml_gender="FEMALE"):
+def synthesize_text_gcp(text):
     # クライアントが初期化されているか再確認
     if _tts_client is None:
         st.error("Text-to-Speech client is not initialized. Cannot synthesize speech.")
@@ -158,11 +159,11 @@ def synthesize_text_gcp(text, voice_name="en-US-Standard-F", ssml_gender="FEMALE
         synthesis_input = texttospeech.SynthesisInput(text=text)
         voice = texttospeech.VoiceSelectionParams(
             language_code="en-US",
-            name=voice_name,
-            ssml_gender=texttospeech.SsmlVoiceGender[ssml_gender.upper()] # 文字列からEnumに変換
+            name="en-US-Standard-F",
+            ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
         )
         audio_config = texttospeech.AudioConfig(
-            audio_encoding=texttospeech.AudioEncoding.MP3, # MP3に統一
+            audio_encoding=texttospeech.AudioEncoding.MP3,
             speaking_rate=1.0,
         )
 
@@ -177,225 +178,225 @@ def synthesize_text_gcp(text, voice_name="en-US-Standard-F", ssml_gender="FEMALE
 # --- Geminiモデルの初期化 ---
 @st.cache_resource
 def get_gemini_model():
-    # system_instruction を使うため、gemini-1.5-flash-latest を使用
-    return genai.GenerativeModel('gemini-1.5-flash-latest')
+    return genai.GenerativeModel('gemini-flash-latest')
 model = get_gemini_model()
 
-# --- キャラクターの定義 ---
-# 各キャラクターの基礎となる指示
-# ★変更点: 他のキャラクターの発言を考慮する指示を追加★
-BASE_INSTRUCTION = (
+# --- キャラクター設定とレベル調整機能 ---
+def get_system_instruction(level):
+    # Base instruction common to all levels, explicitly enforcing English responses
+    base_instruction = (
     "You are an English conversation partner who helps users improve their English skills. "
     "You are also an experienced English teacher with extensive experience guiding native Japanese speakers in learning English as a foreign language. "
     "Please keep in mind that the user is a native Japanese speaker throughout your interactions. "
     "**Always respond only in English. Do not use Japanese at all.**"
-    "**Important: You are participating in a group conversation with other characters. If another character has just spoken, please take their statement into account and build upon it, clarify, or offer a different perspective. Make your response flow naturally within the group dialogue.**" 
 )
 
-# キャラクターごとの詳細設定
-CHARACTERS = {
-    "Hana": {
-        "name": "Hana",
-        "icon": "🌸", # Junior high school student
-        "voice_name": "en-US-Standard-F", # Female voice from GCP TTS
-        "ssml_gender": "FEMALE",
-        "persona": BASE_INSTRUCTION + (
+    if level == "Hana":
+        return base_instruction + (
             " Your name is Tanaka Hana. You are a girl from Wakaba Junior High School, originally from Wakaba City."
             " You have a gentle and meticulous personality, and your friends often consult you when they're in trouble."
             " You've been dedicated to soccer since age 3. Recently, you've been enjoying family camping trips and mastering camp cooking."
             " You're preparing to play in an overseas soccer league after junior high school graduation."
-            " Always speak in a friendly, gentle, and encouraging manner, appropriate for a junior high school student helping a friend learn English."
-        ),
-    },
-    "Mark": {
-        "name": "Mark",
-        "icon": "👨‍👦", # Father figure
-        "voice_name": "en-US-Standard-D", # Male voice from GCP TTS
-        "ssml_gender": "MALE",
-        "persona": BASE_INSTRUCTION + (
-            " Your name is Mark. You are a father from the United States with a cheerful and humorous personality."
-            " You are very proud of your children and love spending time with your family."
-            " You work as a software engineer and enjoy discussing technology and current events."
-            " You also enjoy outdoor activities and traveling."
-            " Always speak in a cheerful, friendly, and slightly humorous tone, like a supportive and engaging father figure."
-        ),
-    },
-    "Ms. Brown": {
-        "name": "Ms. Brown",
-        "icon": "👩‍🏫", # Teacher
-        "voice_name": "en-US-Wavenet-C", # Female voice, professional tone from GCP TTS
-        "ssml_gender": "FEMALE",
-        "persona": BASE_INSTRUCTION + (
-            " Your name is Ms. Brown. You are a highly experienced and professional English teacher."
-            " You are known for your clear explanations, structured lessons, and ability to identify areas for improvement."
-            " You are patient, supportive, and always provide constructive feedback."
-            " You have a deep understanding of common difficulties faced by Japanese English learners."
-            " Always speak in a clear, professional, polite, and encouraging manner, like a seasoned English teacher."
-        ),
-    },
-}
+            " Your favorite subject is English, and your hobbies are soccer and baking sweets."
+            " You will converse according to the English ability of a Japanese junior high school 1st grader."
+            " Focus on basic vocabulary like 'be, have, go, see, eat, school, friend, happy, kind, clean, big, small', targeting a total vocabulary of around 300-1300 words."
+            " Speak slowly using very simple words and short sentences (maximum 10 words per sentence)."
+            " Ask simple questions to encourage conversation."
+            " Keep your responses concise and conversational, ideally around 50 words. Only expand slightly if you need to clarify something briefly."
+            " **Do not point out any grammar or spelling mistakes in the user's input. Accept them as they are and continue the conversation.**"
+        )
+    elif level == "Mark":
+        return base_instruction + (
+            " Your name is Mark Davis. You are a boy from Wakaba Junior High School, originally from Seattle, USA."
+            " You have a cheerful personality and are a mood-maker in class. You have an older sister who is in high school."
+            " You love interacting with people and have been entrusted with looking after the new first-year students in your basketball club."
+            " While continuing your beloved basketball, you are diligently studying to become a veterinarian."
+            " Your favorite subject is Science, and you are very athletic, placing high in the Wakaba Marathon every year."
+            " You will converse according to the English ability of a Japanese junior high school graduate (Eiken Grade 3 equivalent)."
+            " Use everyday, emotional, and regional vocabulary such as 'enjoy, plan, decide, describe, delicious, exciting, important, healthy, wonderful, popular', targeting a total vocabulary of around 1250-2100 words."
+            " Prioritize concise and conversational responses, generally aiming for about 100 words. However, feel free to expand and provide more detail when explaining a concept, sharing an interesting perspective, or offering helpful suggestions related to grammar or vocabulary."
+            " **Only if there are obvious grammar or spelling mistakes in the user's input, gently point them out or suggest a more natural way to phrase it, assisting the user to correct them on their own.**"
+            " Incorporate slightly longer sentences and somewhat complex sentence structures, focusing on a natural flow of conversation."
+        )
+    elif level == "Ms. Brown":
+        return base_instruction + (
+            " Your name is Ms. Lucy Brown. You are an ALT (Assistant Language Teacher) at Wakaba Junior High School, originally from London, UK."
+            " You love reading and own many different books. Recently, you've been reading a lot of Japanese novels."
+            " When you were a junior high school student, your dream was to be a novelist, and you often wrote novels based on everyday events."
+            " You love houseplants and animals."
+            " You will converse in a sophisticated and natural English style, appropriate for an English teacher, but always keeping in mind that your user is a Japanese junior high school student." # ここを修正
+            " Your responses should be clear, engaging, and aim to gently expand their vocabulary and grammatical understanding without being overwhelming." # ここを修正
+            " While you may introduce new, slightly more advanced words or expressions, ensure they are understandable through context or by providing simple explanations if necessary." # ここを追加
+            " Avoid overly academic, abstract, or highly specialized vocabulary that would be far beyond a typical junior high school student's comprehension without significant explanation." # ここを追加
+            " While your default should be a natural, conversational length to foster dynamic exchange, you are encouraged to expand your responses, typically up to around 200 words, when providing detailed explanations of grammar or vocabulary, offering deeper insights, or giving comprehensive feedback to enhance the user's learning."
+            " If there are grammar or spelling mistakes in the user's input, **gently point them out or suggest more sophisticated expressions, assisting the user to think and correct them on their own.**"
+            " However, your role is primarily a facilitator, encouraging the user's critical thinking and expression. Discuss a wide range of topics deeply and in natural English."
+        )
+    else: # Default case, though unlikely with selectbox
+        return base_instruction + " Use natural, everyday English. Engage in friendly conversation and ask open-ended questions."
 
-AVAILABLE_CHARACTER_NAMES = list(CHARACTERS.keys())
 
-# --- Streamlit UI ---
-st.title("English Conversation Partner")
+# --- Streamlit UIの構築 ---
+st.set_page_config(layout="wide")
+st.title("English Conversation Partner 🗣️")
+st.write("Let's practice English together!")
 
-# サイドバーにキャラクター選択
-selected_character_key = st.sidebar.selectbox(
-    "Select your conversation partner:",
-    ["Anyone"] + AVAILABLE_CHARACTER_NAMES,
-    index=0 # Default to "Anyone"
+with st.sidebar:
+    st.header("Settings")
+    
+    # 英語レベル選択
+    english_level = st.selectbox(
+        "Select your English Level:",
+        [
+            "Hana",
+            "Mark",
+            "Ms. Brown"
+        ],
+        index=0,
+        key="english_level_selector"
+    )
+
+    # 音声入力/出力のON/OFFトグル (GCPクライアントが初期化できた場合のみ有効)
+    use_audio_io = st.toggle("音声入出力", value=False, key="audio_io_toggle", disabled=not _can_use_gcp_voice)
+
+    if use_audio_io and (mic_recorder is None or not _can_use_gcp_voice): # mic_recorderの利用可能性とGCP音声利用可能性の両方を確認
+        st.warning("音声入出力は、`streamlit-mic-recorder` ライブラリが不足しているか、GCP認証情報が正しく設定されていないため無効です。")
+
+# --- モデルの初期化 (レベル選択に応じて system_instruction を設定) ---
+current_system_instruction = get_system_instruction(english_level)
+model = genai.GenerativeModel(
+    'gemini-flash-latest',
+    system_instruction=current_system_instruction
 )
 
-# 音声入出力の設定
-use_audio_io = st.sidebar.checkbox("Enable voice input/output", value=True)
-
-
-# --- Chat Historyの初期化 ---
+# --- チャット履歴をStreamlitのセッションステートで管理 ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
-    # 初期の挨拶 (Systemとして)
-    st.session_state.messages.append({
-        "role": "assistant",
-        "name": "System",
-        "icon": "🗣️",
-        "content": "Hello! I'm your English conversation partner. Which character would you like to speak with today, or should anyone respond? I will only respond in English.",
-    })
-    # 各キャラクターの個別対話履歴を初期化
-    st.session_state.char_dialogue_histories = {name: [] for name in AVAILABLE_CHARACTER_NAMES}
+    st.session_state.previous_english_level = english_level # Initialize previous_english_level
+    # 初回メッセージを生成
+    initial_message = ""
+    if english_level == "Hana":
+        initial_message = "Hi! I'm Tanaka Hana. What would you like to talk about today?"
+    elif english_level == "Mark":
+        initial_message = "Hey there! I'm Mark. What's up?"
+    elif english_level == "Ms. Brown":
+        initial_message = "Good day! I'm Ms. Brown. How may I assist you today?"
+    st.session_state.messages.append({"role": "assistant", "content": initial_message})
+
+    # 初回メッセージの音声再生
+    if use_audio_io and _can_use_gcp_voice and initial_message:
+        audio_output = synthesize_text_gcp(initial_message)
+        if audio_output:
+            st.audio(audio_output, format="audio/mpeg", autoplay=True)
 
 
-# --- Chat Historyの表示 ---
-# messages リストが更新されるたびに再描画される
+if st.session_state.get("previous_english_level") != english_level:
+    st.session_state.messages = []
+    # Dynamic initial message after level change
+    initial_message = "Hello! Let's start our conversation. What's on your mind today?"
+    if english_level == "Hana":
+        initial_message = "Hi! I'm Tanaka Hana. What would you like to talk about today?"
+    elif english_level == "Mark":
+        initial_message = "Hey there! I'm Mark. What's up?"
+    elif english_level == "Ms. Brown":
+        initial_message = "Good day! I'm Ms. Brown. How may I assist you today?"
+
+    system_change_message = f"Okay, switching to the {english_level} . {initial_message}"
+    st.session_state.messages.append({"role": "assistant", "content": system_change_message})
+    st.session_state.previous_english_level = english_level
+
+    # レベル変更時のメッセージの音声再生
+    if use_audio_io and _can_use_gcp_voice and system_change_message:
+        audio_output = synthesize_text_gcp(system_change_message)
+        if audio_output:
+            st.audio(audio_output, format="audio/mpeg", autoplay=True)
+
+# --- 既存のチャット履歴を表示 ---
 for message in st.session_state.messages:
-    # メッセージに `icon` キーがない場合のデフォルトアイコンを設定
-    avatar = message.get("icon", "👤" if message["role"] == "user" else "🤖")
-    with st.chat_message(message["role"], avatar=avatar):
-        # `name` キーがある場合は名前も表示
-        if message.get("name"):
-            st.markdown(f"**{message['name']}:** {message['content']}")
-        else:
-            st.markdown(message["content"])
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
+# --- ユーザーからの入力を受け付ける ---
+user_input_from_mic = ""   # マイクからの入力結果を保持する変数
+user_input_from_text = ""  # テキスト入力フォームからの結果を保持する変数
+final_user_input_prompt = "" # 最終的にGeminiに送るプロンプト
 
-# --- 音声入力 (mic_recorder) ---
-if use_audio_io and mic_recorder:
-    audio_bytes = mic_recorder(start_prompt="Start recording", stop_prompt="Stop recording", key="recorder")
-    if audio_bytes:
-        with st.spinner("Transcribing audio..."):
-            transcribed_text = transcribe_audio_gcp(audio_bytes)
-        if transcribed_text:
-            st.session_state.messages.append({"role": "user", "icon": "👤", "content": transcribed_text})
-            st.rerun()
-
-
-# --- LLMからの応答生成 ---
-# chat_inputが呼ばれたら処理を開始
-if user_input := st.chat_input("Type your message here..."):
-    # ユーザーメッセージを全体の履歴に追加
-    st.session_state.messages.append({"role": "user", "icon": "👤", "content": user_input})
-
-    # 応答するキャラクターのリストを決定
-    responding_character_keys = []
-    if selected_character_key == "Anyone":
-        # 応答するキャラクターの数をランダムに決定 (1人、2人、または3人)
-        num_responders = random.randint(1, min(len(AVAILABLE_CHARACTER_NAMES), 3)) # 最大3人、または利用可能な全キャラクター数
-        responding_character_keys = random.sample(AVAILABLE_CHARACTER_NAMES, k=num_responders)
-        random.shuffle(responding_character_keys) # 選ばれたキャラクターの応答順序もランダムに
-    else:
-        # 特定のキャラクターが選択された場合
-        responding_character_keys = [selected_character_key]
-
-    # ★追加: 前のキャラクターの応答を格納する変数 (今回のセッション内限定のコンテキスト) ★
-    context_from_previous_char_response = ""
-    previous_char_name_for_context = ""
-
-    # 各応答キャラクターに対して処理
-    for char_key in responding_character_keys:
-        char_info = CHARACTERS[char_key]
-        
-        # このキャラクターの個別履歴を取得
-        char_history = st.session_state.char_dialogue_histories[char_key]
-
-        # LLMセッションの開始 (毎回新しいセッションを作成することで、system_instruction と history を正確に設定)
-        cleaned_history_for_gemini = []
-        for msg in char_history:
-            if msg["role"] == "user":
-                cleaned_history_for_gemini.append({"role": "user", "parts": [msg["content"]]})
-            elif msg["role"] == "model":
-                cleaned_history_for_gemini.append({"role": "model", "parts": [msg["content"]]})
-
-        chat_session = model.start_chat(
-            history=cleaned_history_for_gemini,
-            system_instruction=char_info["persona"]
+if use_audio_io:
+    st.write("Click the mic and speak!")
+    audio_bytes = None
+    if mic_recorder: # mic_recorder が利用可能かチェック
+        recorded_audio = mic_recorder(
+            start_prompt="🎤 録音開始",
+            stop_prompt="⏹️ 録音停止",
+            just_once=True,
+            use_container_width=True,
+            key='user_mic_input'
         )
-        
-        # ★変更点: 他のキャラクターの発言をユーザー入力として追記★
-        user_input_for_llm = user_input
-        if context_from_previous_char_response:
-            user_input_for_llm += (
-                f"\n\n(Context from recent conversation: The previous character, {previous_char_name_for_context}, "
-                f"just said to the user: '{context_from_previous_char_response}'. Please consider this in your response.)"
-            )
+        if recorded_audio:
+            audio_bytes = recorded_audio['bytes']
 
-        with st.chat_message("assistant", avatar=char_info["icon"]):
-            message_placeholder = st.empty()
-            full_response = ""
-            
-            try:
-                # ユーザー入力をセッションに送信し、ストリーミング応答を取得
-                response_stream = chat_session.send_message(user_input_for_llm, stream=True)
-                
-                for chunk in response_stream:
-                    full_response += chunk.text
-                    # 応答中にキャラクター名を表示し、カーソルエフェクトを付ける
-                    message_placeholder.markdown(f"**{char_info['name']}:** {full_response}▌")
-                
-                # 最終的な表示 (カーソルエフェクト削除)
-                message_placeholder.markdown(f"**{char_info['name']}:** {full_response}")
-                
-                if full_response:
-                    # 全体の履歴に追加
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "name": char_info["name"],
-                        "icon": char_info["icon"],
-                        "content": full_response,
-                    })
+    if audio_bytes and _can_use_gcp_voice:
+        with st.spinner("Processing audio and transcribing..."):
+            user_input_from_mic = transcribe_audio_gcp(audio_bytes)
+            if user_input_from_mic:
+                # st.write(f"You said: {user_input_from_mic}")
+                pass
+            else:
+                st.warning("Could not transcribe audio. Please try speaking clearer, or use text input below.")
+    elif audio_bytes and not _can_use_gcp_voice: # 音声データがあるがGCPが使えない場合
+        st.warning("GCP voice services are not enabled. Cannot transcribe recorded audio.")
 
-                    # 個別キャラクターの履歴に追加 (ユーザー入力とAI応答)
-                    # ここに他のキャラクターの発言は含めない
-                    st.session_state.char_dialogue_histories[char_key].append({
-                        "role": "user", "content": user_input # 元のユーザー入力のみを記録
-                    })
-                    st.session_state.char_dialogue_histories[char_key].append({
-                        "role": "model", "content": full_response
-                    })
+    # マイクからの入力があったかどうかにかかわらず、テキスト入力フォームは常に表示・有効
+    # ここでの disabled は常に False となる
+    user_input_from_text = st.chat_input("Start practicing English with me! (Type here)")
 
-                    # ★追加: 次のキャラクターのために現在の応答をコンテキストとして保持★
-                    context_from_previous_char_response = full_response
-                    previous_char_name_for_context = char_info["name"]
+    # 最終的なユーザー入力を決定：マイクからの入力があればそれを優先、なければテキスト入力を使う
+    if user_input_from_mic:
+        final_user_input_prompt = user_input_from_mic
+    elif user_input_from_text:
+        final_user_input_prompt = user_input_from_text
 
-                    # 音声出力
-                    if use_audio_io and _can_use_gcp_voice:
-                        audio_output = synthesize_text_gcp(
-                            full_response,
-                            voice_name=char_info["voice_name"],
-                            ssml_gender=char_info["ssml_gender"]
-                        )
-                        if audio_output:
-                            st.audio(audio_output, format="audio/mpeg")
-                            st.markdown("🔊 *(Note: On iOS, please tap the play button manually.)*")
-                else:
-                    st.warning(f"{char_info['name']} did not generate a response.")
+else: # use_audio_io が False の場合 (音声入力が無効な場合)
+    final_user_input_prompt = st.chat_input("Start practicing English with me! (Type here)")
 
-            except Exception as e:
-                st.error(f"Error generating response from Gemini for {char_info['name']}: {e}")
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "name": char_info["name"],
-                    "icon": char_info["icon"],
-                    "content": "I apologize, but I could not generate a response. Please try again or ask a different question.",
-                })
-    
-    st.rerun() # すべての応答が完了したら一度だけリロード
+
+if final_user_input_prompt: # ★ここを final_user_input_prompt に変更★
+    st.session_state.messages.append({"role": "user", "content": final_user_input_prompt}) # ★ここを final_user_input_prompt に変更★
+    with st.chat_message("user"):
+        st.markdown(final_user_input_prompt) # ★ここを final_user_input_prompt に変更★
+
+    with st.chat_message("assistant"):
+        message_placeholder = st.empty()
+        full_response = ""
+
+        gemini_chat_history = []
+        for msg in st.session_state.messages:
+            if msg["role"] == "user":
+                gemini_chat_history.append({"role": "user", "parts": [msg["content"]]})
+            elif msg["role"] == "assistant":
+                # レベル変更時のシステムメッセージは履歴に含めない
+                if "Okay, switching to the " not in msg["content"]:
+                    gemini_chat_history.append({"role": "model", "parts": [msg["content"]]})
+
+        chat = model.start_chat(history=gemini_chat_history)
+
+        try:
+            response_generator = chat.send_message(final_user_input_prompt, stream=True) # ★ここを final_user_input_prompt に変更★
+
+            for chunk in response_generator:
+                full_response += chunk.text
+                message_placeholder.markdown(full_response + "▌")
+                time.sleep(0.05)
+            message_placeholder.markdown(full_response)
+
+            st.session_state.messages.append({"role": "assistant", "content": full_response})
+
+            # Assistantの返答を音声で再生
+            if use_audio_io and _can_use_gcp_voice and full_response:
+                audio_output = synthesize_text_gcp(full_response)
+                if audio_output:
+                    st.audio(audio_output, format="audio/mpeg", autoplay=True)
+
+        except Exception as e:
+            st.error(f"An error occurred with Gemini: {e}. Please try again.")
+            st.session_state.messages.append({"role": "assistant", "content": f"An error occurred with Gemini: {e}. Please try again."})
